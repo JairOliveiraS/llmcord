@@ -3,7 +3,7 @@
 bot_token_env: DISCORD_BOT_TOKEN
 client_id_env: DISCORD_CLIENT_ID
 
-status_message: 
+status_message:
 
 max_text: 100000
 max_images: 5
@@ -59,7 +59,7 @@ providers:
     base_url: http://localhost:8000/v1
 
 models:
-  openai/gpt-5.5:
+  openrouter/openai/gpt-5.5:
     reasoning_effort: high
     verbosity: medium
 
@@ -67,20 +67,20 @@ models:
     tools:
       - type: openrouter:web_search
       - type: openrouter:web_fetch
-  
-  - openrouter/z-ai/glm-5.2:
-  - openrouter/z-ai/glm-5v-turbo:
-  - openrouter/xiaomi/mimo-v2.5-pro:
-  - openrouter/openai/gpt-5.6-luna:
-  - openrouter/openai/gpt-5.6-terra:
-  - openrouter/google/gemini-3.6-flash:
-  - openrouter/google/gemini-3.5-flash-lite:
-  - openrouter/google/gemini-2.5-pro:
-  - openrouter/anthropic/claude-haiku-4.5:
+
+  openrouter/z-ai/glm-5.2:
+  openrouter/z-ai/glm-5v-turbo:
+  openrouter/xiaomi/mimo-v2.5-pro:
+  openrouter/openai/gpt-5.6-luna:
+  openrouter/openai/gpt-5.6-terra:
+  openrouter/google/gemini-3.6-flash:
+  openrouter/google/gemini-3.5-flash-lite:
+  openrouter/google/gemini-2.5-pro:
+  openrouter/anthropic/claude-haiku-4.5:
 
 system_prompt: |
   You are a Discord chatbot. Be kind, cute, kawaii and use emojis just like a real person. Be talkactive.
-  Your name is Meisho Doto, and you'll roleplay as her. 
+  Your name is Meisho Doto, and you'll roleplay as her.
   Whenever someone asks you something, use your knowledge and/or the internet to asnwer them. This means you'll roleplay as Meisho Doto, but you can also be an assistant when someone asks you something.
 
   Today's date is {date}. The current time is {time}.
