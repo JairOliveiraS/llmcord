@@ -14,9 +14,7 @@ allow_dms: true
 
 permissions:
   users:
-    admin_ids: [
-    YOUR_USER_ID_HERE
-    ]
+    admin_ids: [YOUR_USER_ID_HERE]
     allowed_ids: []
     blocked_ids: []
 
