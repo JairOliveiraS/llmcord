@@ -179,10 +179,24 @@ async def on_message(new_msg: discord.Message) -> None:
     user_warnings = set()
 
     try:
-        history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages, before=new_msg)]
+        # Fetch more messages than needed so we have room after filtering bot messages
+        history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages * 3, before=new_msg)]
         history_msgs.reverse()
 
+        # Include the triggering message itself as part of the context
+        history_msgs.append(new_msg)
+
+        # Find the most recent bot message so we can keep only that one
+        last_bot_msg_id = None
+        for msg in reversed(history_msgs):
+            if msg.author == discord_bot.user:
+                last_bot_msg_id = msg.id
+                break
+
         for hist_msg in history_msgs:
+            # Keep only the most recent bot response, skip older bot messages
+            if hist_msg.author == discord_bot.user and hist_msg.id != last_bot_msg_id:
+                continue
             cleaned_content = hist_msg.content.removeprefix(discord_bot.user.mention).lstrip()
 
             good_attachments = [att for att in hist_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
