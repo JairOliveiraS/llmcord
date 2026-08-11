@@ -174,107 +174,115 @@ async def on_message(new_msg: discord.Message) -> None:
     max_images = config.get("max_images", 5) if accept_images else 0
     max_messages = config.get("max_messages", 25)
 
-    # Build a single labeled transcript instead of alternating API turns.
-    # This preserves both sides of the conversation while making the current
-    # message unambiguous to the model and avoiding provider turn-order rules.
+    # --- MODIFIED: build context from channel history instead of reply chains ---
     user_warnings = set()
 
+    def format_history_msg(hist_msg, is_current=False):
+        """Format a message with timestamp for clear temporal context."""
+        ts = hist_msg.created_at.strftime("%b %d %H:%M")
+        prefix = "CURRENT" if is_current else "history"
+        role = "assistant" if hist_msg.author == discord_bot.user else "user"
+        cleaned = hist_msg.content.removeprefix(discord_bot.user.mention).lstrip()
+        if role == "user":
+            text = f"[{prefix}] <@{hist_msg.author.id}> ({ts}): {cleaned}"
+        else:
+            text = f"[{prefix}] Meisho Doto ({ts}): {cleaned}"
+        return text, role
+
+    # Build messages in CORRECT API order: system prompt → history → current message
+    messages = []
+
+    # 1. System prompt FIRST
     if system_prompt := config.get("system_prompt"):
         now = datetime.now().astimezone()
         system_prompt = system_prompt.replace("{date}", now.strftime("%B %d %Y")).replace("{time}", now.strftime("%H:%M:%S %Z%z")).strip()
-    else:
-        system_prompt = "You are a helpful assistant."
-
-    system_prompt += "\n\nThe conversation transcript below is background context. Answer ONLY the message marked CURRENT. Do not re-answer older messages or repeat previous answers. Use the history for continuity, but follow the current message if it changes topic. Do not mention these transcript instructions."
-
-    transcript_lines = []
-    transcript_images = []
-    history_count = 0
-    image_count = 0
-
-    async def add_transcript_message(message: discord.Message, label: str) -> None:
-        nonlocal history_count, image_count
-
-        timestamp = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
-        author = "Meisho Doto" if message.author == discord_bot.user else f"User <@{message.author.id}>"
-        text = message.content.removeprefix(discord_bot.user.mention).strip()
-        if not text:
-            text = "[no text]"
-
-        # Preserve text attachments in the transcript.
-        supported_attachments = [
-            att for att in message.attachments
-            if att.content_type and any(att.content_type.startswith(kind) for kind in ("text", "image"))
-        ]
-        attachment_responses = await asyncio.gather(
-            *[httpx_client.get(att.url) for att in supported_attachments],
-            return_exceptions=True,
-        )
-
-        text_attachment_parts = []
-        for att, response in zip(supported_attachments, attachment_responses):
-            if isinstance(response, Exception):
-                logging.warning("Could not fetch attachment %s: %s", att.url, response)
-                continue
-
-            if att.content_type.startswith("text"):
-                text_attachment_parts.append(f"[text attachment: {att.filename}]\\n{response.text[:max_text]}")
-            elif att.content_type.startswith("image"):
-                if accept_images and image_count < max_images:
-                    transcript_images.append(
-                        dict(
-                            type="image_url",
-                            image_url=dict(
-                                url=f"data:{att.content_type};base64,{b64encode(response.content).decode('utf-8')}"
-                            ),
-                        )
-                    )
-                    image_count += 1
-                    text_attachment_parts.append(f"[image attachment included: {att.filename}]")
-                else:
-                    text_attachment_parts.append(f"[image attachment omitted: {att.filename}]")
-
-        if text_attachment_parts:
-            text += "\\n" + "\\n".join(text_attachment_parts)
-
-        transcript_lines.append(f"[{label}] {timestamp} | {author}:\\n{text}")
-        history_count += 1
+        messages.append(dict(role="system", content=system_prompt))
 
     try:
+        # Fetch channel history (oldest to newest)
         history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages, before=new_msg)]
         history_msgs.reverse()
 
-        transcript_lines.append("=== BEGIN BACKGROUND HISTORY ===")
-        for hist_msg in history_msgs:
-            # Ignore system/command-like messages that are not dialogue.
-            if hist_msg.type not in (discord.MessageType.default, discord.MessageType.reply):
-                continue
-            await add_transcript_message(hist_msg, "HISTORY")
-        transcript_lines.append("=== END BACKGROUND HISTORY ===")
+        # Trim trailing bot messages to ensure we never end on an assistant turn
+        while history_msgs and history_msgs[-1].author == discord_bot.user:
+            history_msgs.pop()
 
-        await add_transcript_message(new_msg, "CURRENT")
+        # 2. Process history messages (oldest to newest)
+        for hist_msg in history_msgs:
+            msg_text, msg_role = format_history_msg(hist_msg, is_current=False)
+
+            good_attachments = [att for att in hist_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
+
+            attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
+
+            msg_images = [
+                dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
+                for att, resp in zip(good_attachments, attachment_responses)
+                if att.content_type.startswith("image")
+            ]
+
+            extra_text = "\n".join(
+                ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in hist_msg.embeds]
+                + [component.content for component in hist_msg.components if component.type == discord.ComponentType.text_display]
+                + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
+            )
+            if extra_text:
+                msg_text += "\n" + extra_text
+
+            has_bad_attachments = len(hist_msg.attachments) > len(good_attachments)
+
+            if msg_images[:max_images]:
+                content = [dict(type="text", text=msg_text[:max_text])] + msg_images[:max_images]
+            else:
+                content = msg_text[:max_text]
+
+            if content != "":
+                messages.append(dict(content=content, role=msg_role))
+
+            if len(msg_text) > max_text:
+                user_warnings.add(f"⚠️ Max {max_text:,} characters per message")
+            if len(msg_images) > max_images:
+                user_warnings.add(f"⚠️ Max {max_images} image{'' if max_images == 1 else 's'} per message" if max_images > 0 else "⚠️ Can't see images")
+            if has_bad_attachments:
+                user_warnings.add("⚠️ Unsupported attachments")
+
+        # 3. Add the CURRENT (triggering) message LAST — this is what the bot responds to
+        curr_text, _ = format_history_msg(new_msg, is_current=True)
+
+        curr_attachments = [att for att in new_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
+        curr_att_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in curr_attachments])
+
+        curr_images = [
+            dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
+            for att, resp in zip(curr_attachments, curr_att_responses)
+            if att.content_type.startswith("image")
+        ]
+
+        if curr_images[:max_images]:
+            curr_content_final = [dict(type="text", text=curr_text[:max_text])] + curr_images[:max_images]
+        else:
+            curr_content_final = curr_text[:max_text]
+
+        if curr_content_final != "":
+            messages.append(dict(content=curr_content_final, role="user"))
 
     except (discord.NotFound, discord.HTTPException):
         logging.exception("Error fetching channel history")
-        transcript_lines.append("=== BEGIN BACKGROUND HISTORY ===\\n(no history available)\\n=== END BACKGROUND HISTORY ===")
-        await add_transcript_message(new_msg, "CURRENT")
 
-    if history_count - 1 < max_messages:
-        user_warnings.add(f"⚠️ Using {max(0, history_count - 1)} history message{'' if history_count - 1 == 1 else 's'}")
-    if image_count >= max_images > 0:
-        user_warnings.add(f"⚠️ Using at most {max_images} image{'' if max_images == 1 else 's'}")
-    if not accept_images and any(att.content_type and att.content_type.startswith("image") for att in new_msg.attachments):
-        user_warnings.add("⚠️ Selected model cannot see images")
+    num_user_msgs = len(messages) - 1  # exclude system prompt
+    if num_user_msgs < max_messages:
+        user_warnings.add(f"⚠️ Only using last {num_user_msgs} message{'' if num_user_msgs == 1 else 's'}")
 
-    transcript = "\\n\\n".join(transcript_lines)
-    transcript_content = [dict(type="text", text=transcript)] + transcript_images
-    messages = [
-        dict(role="system", content=system_prompt),
-        dict(role="user", content=transcript_content),
-    ]
+    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {num_user_msgs}):\n{new_msg.content}")
 
-    logging.info(f"Message received (user ID: {new_msg.author.id}, history messages: {max(0, history_count - 1)})")
-    logging.info("Sending transcript to API: 2 messages, final role=user")
+    # --- SAFETY: ensure conversation never ends on an assistant turn (Gemini requirement) ---
+    # Only remove the LAST message if it's an assistant turn (preserves all other bot context)
+    if messages and messages[-1].get("role") == "assistant":
+        messages.pop()
+
+    # Log final message roles for debugging
+    final_roles = [m.get("role", "?") for m in messages]
+    logging.info(f"Sending {len(messages)} messages to API. Order: {final_roles}")
 
     # Generate and send response message(s) (can be multiple if response is long)
     curr_content = finish_reason = None
