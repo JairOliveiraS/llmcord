@@ -178,39 +178,30 @@ async def on_message(new_msg: discord.Message) -> None:
     messages = []
     user_warnings = set()
 
+    def format_history_msg(hist_msg, is_current=False):
+        """Format a message with timestamp for clear temporal context."""
+        ts = hist_msg.created_at.strftime("%b %d %H:%M")
+        prefix = "CURRENT" if is_current else "history"
+        role = "assistant" if hist_msg.author == discord_bot.user else "user"
+        cleaned = hist_msg.content.removeprefix(discord_bot.user.mention).lstrip()
+        if role == "user":
+            text = f"[{prefix}] <@{hist_msg.author.id}> ({ts}): {cleaned}"
+        else:
+            text = f"[{prefix}] Meisho Doto ({ts}): {cleaned}"
+        return text, role
+
     try:
-        # Fetch more messages than needed so we have room after filtering bot messages
-        history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages * 3, before=new_msg)]
+        # Fetch channel history (now includes all messages — timestamps + [CURRENT] tag prevent confusion)
+        history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages, before=new_msg)]
         history_msgs.reverse()
 
-        # Include the triggering message itself as part of the context
-        history_msgs.append(new_msg)
-
-        # Find the most recent bot message so we can keep only that one
-        last_bot_msg_id = None
-        for msg in reversed(history_msgs):
-            if msg.author == discord_bot.user:
-                last_bot_msg_id = msg.id
-                break
-
+        # Process history messages (all except the triggering message)
         for hist_msg in history_msgs:
-            # Keep only the most recent bot response, skip older bot messages
-            if hist_msg.author == discord_bot.user and hist_msg.id != last_bot_msg_id:
-                continue
-            cleaned_content = hist_msg.content.removeprefix(discord_bot.user.mention).lstrip()
+            msg_text, msg_role = format_history_msg(hist_msg, is_current=False)
 
             good_attachments = [att for att in hist_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
 
             attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
-
-            msg_role = "assistant" if hist_msg.author == discord_bot.user else "user"
-
-            msg_text = "\n".join(
-                ([cleaned_content] if cleaned_content else [])
-                + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in hist_msg.embeds]
-                + [component.content for component in hist_msg.components if component.type == discord.ComponentType.text_display]
-                + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
-            )
 
             msg_images = [
                 dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
@@ -218,8 +209,13 @@ async def on_message(new_msg: discord.Message) -> None:
                 if att.content_type.startswith("image")
             ]
 
-            if msg_role == "user" and (msg_text or msg_images):
-                msg_text = f"<@{hist_msg.author.id}>: {msg_text}"
+            extra_text = "\n".join(
+                ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in hist_msg.embeds]
+                + [component.content for component in hist_msg.components if component.type == discord.ComponentType.text_display]
+                + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
+            )
+            if extra_text:
+                msg_text += "\n" + extra_text
 
             has_bad_attachments = len(hist_msg.attachments) > len(good_attachments)
 
@@ -237,6 +233,26 @@ async def on_message(new_msg: discord.Message) -> None:
                 user_warnings.add(f"⚠️ Max {max_images} image{'' if max_images == 1 else 's'} per message" if max_images > 0 else "⚠️ Can't see images")
             if has_bad_attachments:
                 user_warnings.add("⚠️ Unsupported attachments")
+
+        # Add the CURRENT (triggering) message with [CURRENT] tag so the LLM knows what to respond to
+        curr_text, _ = format_history_msg(new_msg, is_current=True)
+
+        curr_attachments = [att for att in new_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
+        curr_att_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in curr_attachments])
+
+        curr_images = [
+            dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
+            for att, resp in zip(curr_attachments, curr_att_responses)
+            if att.content_type.startswith("image")
+        ]
+
+        if curr_images[:max_images]:
+            curr_content_final = [dict(type="text", text=curr_text[:max_text])] + curr_images[:max_images]
+        else:
+            curr_content_final = curr_text[:max_text]
+
+        if curr_content_final != "":
+            messages.append(dict(content=curr_content_final, role="user"))
 
     except (discord.NotFound, discord.HTTPException):
         logging.exception("Error fetching channel history")
