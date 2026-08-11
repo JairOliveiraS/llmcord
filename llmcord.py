@@ -117,7 +117,11 @@ async def on_message(new_msg: discord.Message) -> None:
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
 
-    if (not is_dm and discord_bot.user not in new_msg.mentions) or new_msg.author.bot:
+    # --- MODIFIED: keyword triggers ---
+    trigger_keywords = config.get("trigger_keywords", [])
+    has_keyword = any(kw.lower() in new_msg.content.lower() for kw in trigger_keywords)
+
+    if (not is_dm and discord_bot.user not in new_msg.mentions and not has_keyword) or new_msg.author.bot:
         return
 
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
@@ -167,83 +171,61 @@ async def on_message(new_msg: discord.Message) -> None:
     max_images = config.get("max_images", 5) if accept_images else 0
     max_messages = config.get("max_messages", 25)
 
-    # Build message chain and set user warnings
+    # --- MODIFIED: build context from channel history instead of reply chains ---
     messages = []
     user_warnings = set()
-    curr_msg = new_msg
 
-    while curr_msg != None and len(messages) < max_messages:
-        curr_node = msg_nodes.setdefault(curr_msg.id, MsgNode())
+    try:
+        history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages, before=new_msg)]
+        history_msgs.reverse()
 
-        async with curr_node.lock:
-            if curr_node.text == None:
-                cleaned_content = curr_msg.content.removeprefix(discord_bot.user.mention).lstrip()
+        for hist_msg in history_msgs:
+            cleaned_content = hist_msg.content.removeprefix(discord_bot.user.mention).lstrip()
 
-                good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
+            good_attachments = [att for att in hist_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
 
-                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
+            attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
 
-                curr_node.role = "assistant" if curr_msg.author == discord_bot.user else "user"
+            msg_role = "assistant" if hist_msg.author == discord_bot.user else "user"
 
-                curr_node.text = "\n".join(
-                    ([cleaned_content] if cleaned_content else [])
-                    + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
-                    + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
-                    + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
-                )
+            msg_text = "\n".join(
+                ([cleaned_content] if cleaned_content else [])
+                + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in hist_msg.embeds]
+                + [component.content for component in hist_msg.components if component.type == discord.ComponentType.text_display]
+                + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
+            )
 
-                curr_node.images = [
-                    dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
-                    for att, resp in zip(good_attachments, attachment_responses)
-                    if att.content_type.startswith("image")
-                ]
+            msg_images = [
+                dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
+                for att, resp in zip(good_attachments, attachment_responses)
+                if att.content_type.startswith("image")
+            ]
 
-                if curr_node.role == "user" and (curr_node.text or curr_node.images):
-                    curr_node.text = f"<@{curr_msg.author.id}>: {curr_node.text}"
+            if msg_role == "user" and (msg_text or msg_images):
+                msg_text = f"<@{hist_msg.author.id}>: {msg_text}"
 
-                curr_node.has_bad_attachments = len(curr_msg.attachments) > len(good_attachments)
+            has_bad_attachments = len(hist_msg.attachments) > len(good_attachments)
 
-                try:
-                    if (
-                        curr_msg.reference == None
-                        and discord_bot.user.mention not in curr_msg.content
-                        and (prev_msg_in_channel := ([m async for m in curr_msg.channel.history(before=curr_msg, limit=1)] or [None])[0])
-                        and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply)
-                        and prev_msg_in_channel.author == (discord_bot.user if curr_msg.channel.type == discord.ChannelType.private else curr_msg.author)
-                    ):
-                        curr_node.parent_msg = prev_msg_in_channel
-                    else:
-                        is_public_thread = curr_msg.channel.type == discord.ChannelType.public_thread
-                        parent_is_thread_start = is_public_thread and curr_msg.reference == None and curr_msg.channel.parent.type == discord.ChannelType.text
-
-                        if parent_msg_id := curr_msg.channel.id if parent_is_thread_start else getattr(curr_msg.reference, "message_id", None):
-                            if parent_is_thread_start:
-                                curr_node.parent_msg = curr_msg.channel.starter_message or await curr_msg.channel.parent.fetch_message(parent_msg_id)
-                            else:
-                                curr_node.parent_msg = curr_msg.reference.cached_message or await curr_msg.channel.fetch_message(parent_msg_id)
-
-                except (discord.NotFound, discord.HTTPException):
-                    logging.exception("Error fetching next message in the chain")
-                    curr_node.fetch_parent_failed = True
-
-            if curr_node.images[:max_images]:
-                content = [dict(type="text", text=curr_node.text[:max_text])] + curr_node.images[:max_images]
+            if msg_images[:max_images]:
+                content = [dict(type="text", text=msg_text[:max_text])] + msg_images[:max_images]
             else:
-                content = curr_node.text[:max_text]
+                content = msg_text[:max_text]
 
             if content != "":
-                messages.append(dict(content=content, role=curr_node.role))
+                messages.append(dict(content=content, role=msg_role))
 
-            if len(curr_node.text) > max_text:
+            if len(msg_text) > max_text:
                 user_warnings.add(f"⚠️ Max {max_text:,} characters per message")
-            if len(curr_node.images) > max_images:
+            if len(msg_images) > max_images:
                 user_warnings.add(f"⚠️ Max {max_images} image{'' if max_images == 1 else 's'} per message" if max_images > 0 else "⚠️ Can't see images")
-            if curr_node.has_bad_attachments:
+            if has_bad_attachments:
                 user_warnings.add("⚠️ Unsupported attachments")
-            if curr_node.fetch_parent_failed or (curr_node.parent_msg != None and len(messages) == max_messages):
-                user_warnings.add(f"⚠️ Only using last {len(messages)} message{'' if len(messages) == 1 else 's'}")
 
-            curr_msg = curr_node.parent_msg
+    except (discord.NotFound, discord.HTTPException):
+        logging.exception("Error fetching channel history")
+
+    if len(messages) < max_messages:
+        user_warnings.add(f"⚠️ Only using last {len(messages)} message{'' if len(messages) == 1 else 's'}")
 
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}")
 
