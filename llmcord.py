@@ -276,7 +276,8 @@ async def on_message(new_msg: discord.Message) -> None:
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {num_user_msgs}):\n{new_msg.content}")
 
     # --- SAFETY: ensure conversation never ends on an assistant turn (Gemini requirement) ---
-    while messages and messages[-1].get("role") == "assistant":
+    # Only remove the LAST message if it's an assistant turn (preserves all other bot context)
+    if messages and messages[-1].get("role") == "assistant":
         messages.pop()
 
     # Log final message roles for debugging
