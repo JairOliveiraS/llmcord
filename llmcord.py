@@ -195,6 +195,10 @@ async def on_message(new_msg: discord.Message) -> None:
         history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages, before=new_msg)]
         history_msgs.reverse()
 
+        # Trim trailing bot messages to ensure the API conversation never ends on an assistant turn
+        while history_msgs and history_msgs[-1].author == discord_bot.user:
+            history_msgs.pop()
+
         # Process history messages (all except the triggering message)
         for hist_msg in history_msgs:
             msg_text, msg_role = format_history_msg(hist_msg, is_current=False)
