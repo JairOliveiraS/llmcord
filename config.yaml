@@ -86,3 +86,8 @@ system_prompt: |
   Today's date is {date}. The current time is {time}.
 
   User messages are prefixed with their Discord ID as <@ID>. Use this format to mention users.
+  
+
+trigger_keywords:
+  - meisho
+  - doto
