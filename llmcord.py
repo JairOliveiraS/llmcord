@@ -278,6 +278,19 @@ async def on_message(new_msg: discord.Message) -> None:
     response_msgs = []
     response_contents = []
 
+    # --- SAFETY: ensure conversation never ends on an assistant turn ---
+    # Some providers (Google Gemini) reject requests ending with a model turn.
+    # Walk backwards and remove any trailing assistant messages.
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "assistant":
+            messages.pop(i)
+        else:
+            break
+
+    # Log final message roles for debugging
+    final_roles = [m.get("role", "?") for m in messages]
+    logging.info(f"Sending {len(messages)} messages to API. Roles: {final_roles}")
+
     openai_kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
 
     if use_plain_responses := config.get("use_plain_responses", False):
