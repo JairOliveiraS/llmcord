@@ -59,15 +59,7 @@ providers:
     base_url: http://localhost:8000/v1
 
 models:
-  openrouter/openai/gpt-5.5:
-    reasoning_effort: high
-    verbosity: medium
-
-  openrouter/~anthropic/claude-opus-latest:
-    tools:
-      - type: openrouter:web_search
-      - type: openrouter:web_fetch
-
+  
   openrouter/z-ai/glm-5.2:
   openrouter/z-ai/glm-5v-turbo:
   openrouter/xiaomi/mimo-v2.5-pro:
