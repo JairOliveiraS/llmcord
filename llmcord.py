@@ -188,16 +188,56 @@ async def on_message(new_msg: discord.Message) -> None:
     system_prompt += "\n\nThe conversation transcript below is background context. Answer ONLY the message marked CURRENT. Do not re-answer older messages or repeat previous answers. Use the history for continuity, but follow the current message if it changes topic. Do not mention these transcript instructions."
 
     transcript_lines = []
+    transcript_images = []
     history_count = 0
+    image_count = 0
 
-    def add_transcript_message(message: discord.Message, label: str) -> None:
-        nonlocal history_count
+    async def add_transcript_message(message: discord.Message, label: str) -> None:
+        nonlocal history_count, image_count
+
         timestamp = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
         author = "Meisho Doto" if message.author == discord_bot.user else f"User <@{message.author.id}>"
         text = message.content.removeprefix(discord_bot.user.mention).strip()
         if not text:
             text = "[no text]"
-        transcript_lines.append(f"[{label}] {timestamp} | {author}:\n{text}")
+
+        # Preserve text attachments in the transcript.
+        supported_attachments = [
+            att for att in message.attachments
+            if att.content_type and any(att.content_type.startswith(kind) for kind in ("text", "image"))
+        ]
+        attachment_responses = await asyncio.gather(
+            *[httpx_client.get(att.url) for att in supported_attachments],
+            return_exceptions=True,
+        )
+
+        text_attachment_parts = []
+        for att, response in zip(supported_attachments, attachment_responses):
+            if isinstance(response, Exception):
+                logging.warning("Could not fetch attachment %s: %s", att.url, response)
+                continue
+
+            if att.content_type.startswith("text"):
+                text_attachment_parts.append(f"[text attachment: {att.filename}]\\n{response.text[:max_text]}")
+            elif att.content_type.startswith("image"):
+                if accept_images and image_count < max_images:
+                    transcript_images.append(
+                        dict(
+                            type="image_url",
+                            image_url=dict(
+                                url=f"data:{att.content_type};base64,{b64encode(response.content).decode('utf-8')}"
+                            ),
+                        )
+                    )
+                    image_count += 1
+                    text_attachment_parts.append(f"[image attachment included: {att.filename}]")
+                else:
+                    text_attachment_parts.append(f"[image attachment omitted: {att.filename}]")
+
+        if text_attachment_parts:
+            text += "\\n" + "\\n".join(text_attachment_parts)
+
+        transcript_lines.append(f"[{label}] {timestamp} | {author}:\\n{text}")
         history_count += 1
 
     try:
@@ -206,26 +246,31 @@ async def on_message(new_msg: discord.Message) -> None:
 
         transcript_lines.append("=== BEGIN BACKGROUND HISTORY ===")
         for hist_msg in history_msgs:
-            # Ignore bot-authored system/command-like messages that are not dialogue.
+            # Ignore system/command-like messages that are not dialogue.
             if hist_msg.type not in (discord.MessageType.default, discord.MessageType.reply):
                 continue
-            add_transcript_message(hist_msg, "HISTORY")
+            await add_transcript_message(hist_msg, "HISTORY")
         transcript_lines.append("=== END BACKGROUND HISTORY ===")
 
-        add_transcript_message(new_msg, "CURRENT")
+        await add_transcript_message(new_msg, "CURRENT")
 
     except (discord.NotFound, discord.HTTPException):
         logging.exception("Error fetching channel history")
-        transcript_lines.append("=== BEGIN BACKGROUND HISTORY ===\n(no history available)\n=== END BACKGROUND HISTORY ===")
-        add_transcript_message(new_msg, "CURRENT")
+        transcript_lines.append("=== BEGIN BACKGROUND HISTORY ===\\n(no history available)\\n=== END BACKGROUND HISTORY ===")
+        await add_transcript_message(new_msg, "CURRENT")
 
     if history_count - 1 < max_messages:
         user_warnings.add(f"⚠️ Using {max(0, history_count - 1)} history message{'' if history_count - 1 == 1 else 's'}")
+    if image_count >= max_images > 0:
+        user_warnings.add(f"⚠️ Using at most {max_images} image{'' if max_images == 1 else 's'}")
+    if not accept_images and any(att.content_type and att.content_type.startswith("image") for att in new_msg.attachments):
+        user_warnings.add("⚠️ Selected model cannot see images")
 
-    transcript = "\n\n".join(transcript_lines)
+    transcript = "\\n\\n".join(transcript_lines)
+    transcript_content = [dict(type="text", text=transcript)] + transcript_images
     messages = [
         dict(role="system", content=system_prompt),
-        dict(role="user", content=transcript),
+        dict(role="user", content=transcript_content),
     ]
 
     logging.info(f"Message received (user ID: {new_msg.author.id}, history messages: {max(0, history_count - 1)})")
