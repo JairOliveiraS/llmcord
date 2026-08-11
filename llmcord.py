@@ -117,17 +117,20 @@ async def on_message(new_msg: discord.Message) -> None:
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
 
-    # --- MODIFIED: keyword triggers ---
-    trigger_keywords = config.get("trigger_keywords", [])
-    has_keyword = any(kw.lower() in new_msg.content.lower() for kw in trigger_keywords)
-
-    if (not is_dm and discord_bot.user not in new_msg.mentions and not has_keyword) or new_msg.author.bot:
+    if new_msg.author.bot:
         return
 
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
     channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
 
     config = await asyncio.to_thread(get_config)
+
+    # --- MODIFIED: keyword triggers (after config is loaded) ---
+    trigger_keywords = config.get("trigger_keywords", [])
+    has_keyword = any(kw.lower() in new_msg.content.lower() for kw in trigger_keywords)
+
+    if not is_dm and discord_bot.user not in new_msg.mentions and not has_keyword:
+        return
 
     allow_dms = config.get("allow_dms", True)
 
