@@ -175,7 +175,6 @@ async def on_message(new_msg: discord.Message) -> None:
     max_messages = config.get("max_messages", 25)
 
     # --- MODIFIED: build context from channel history instead of reply chains ---
-    messages = []
     user_warnings = set()
 
     def format_history_msg(hist_msg, is_current=False):
@@ -190,16 +189,25 @@ async def on_message(new_msg: discord.Message) -> None:
             text = f"[{prefix}] Meisho Doto ({ts}): {cleaned}"
         return text, role
 
+    # Build messages in CORRECT API order: system prompt → history → current message
+    messages = []
+
+    # 1. System prompt FIRST
+    if system_prompt := config.get("system_prompt"):
+        now = datetime.now().astimezone()
+        system_prompt = system_prompt.replace("{date}", now.strftime("%B %d %Y")).replace("{time}", now.strftime("%H:%M:%S %Z%z")).strip()
+        messages.append(dict(role="system", content=system_prompt))
+
     try:
-        # Fetch channel history (now includes all messages — timestamps + [CURRENT] tag prevent confusion)
+        # Fetch channel history (oldest to newest)
         history_msgs = [msg async for msg in new_msg.channel.history(limit=max_messages, before=new_msg)]
         history_msgs.reverse()
 
-        # Trim trailing bot messages to ensure the API conversation never ends on an assistant turn
+        # Trim trailing bot messages to ensure we never end on an assistant turn
         while history_msgs and history_msgs[-1].author == discord_bot.user:
             history_msgs.pop()
 
-        # Process history messages (all except the triggering message)
+        # 2. Process history messages (oldest to newest)
         for hist_msg in history_msgs:
             msg_text, msg_role = format_history_msg(hist_msg, is_current=False)
 
@@ -238,7 +246,7 @@ async def on_message(new_msg: discord.Message) -> None:
             if has_bad_attachments:
                 user_warnings.add("⚠️ Unsupported attachments")
 
-        # Add the CURRENT (triggering) message with [CURRENT] tag so the LLM knows what to respond to
+        # 3. Add the CURRENT (triggering) message LAST — this is what the bot responds to
         curr_text, _ = format_history_msg(new_msg, is_current=True)
 
         curr_attachments = [att for att in new_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
@@ -261,37 +269,26 @@ async def on_message(new_msg: discord.Message) -> None:
     except (discord.NotFound, discord.HTTPException):
         logging.exception("Error fetching channel history")
 
-    if len(messages) < max_messages:
-        user_warnings.add(f"⚠️ Only using last {len(messages)} message{'' if len(messages) == 1 else 's'}")
+    num_user_msgs = len(messages) - 1  # exclude system prompt
+    if num_user_msgs < max_messages:
+        user_warnings.add(f"⚠️ Only using last {num_user_msgs} message{'' if num_user_msgs == 1 else 's'}")
 
-    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}")
+    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {num_user_msgs}):\n{new_msg.content}")
 
-    if system_prompt := config.get("system_prompt"):
-        now = datetime.now().astimezone()
+    # --- SAFETY: ensure conversation never ends on an assistant turn (Gemini requirement) ---
+    while messages and messages[-1].get("role") == "assistant":
+        messages.pop()
 
-        system_prompt = system_prompt.replace("{date}", now.strftime("%B %d %Y")).replace("{time}", now.strftime("%H:%M:%S %Z%z")).strip()
-
-        messages.append(dict(role="system", content=system_prompt))
+    # Log final message roles for debugging
+    final_roles = [m.get("role", "?") for m in messages]
+    logging.info(f"Sending {len(messages)} messages to API. Order: {final_roles}")
 
     # Generate and send response message(s) (can be multiple if response is long)
     curr_content = finish_reason = None
     response_msgs = []
     response_contents = []
 
-    # --- SAFETY: ensure conversation never ends on an assistant turn ---
-    # Some providers (Google Gemini) reject requests ending with a model turn.
-    # Walk backwards and remove any trailing assistant messages.
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get("role") == "assistant":
-            messages.pop(i)
-        else:
-            break
-
-    # Log final message roles for debugging
-    final_roles = [m.get("role", "?") for m in messages]
-    logging.info(f"Sending {len(messages)} messages to API. Roles: {final_roles}")
-
-    openai_kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
+    openai_kwargs = dict(model=model, messages=messages, stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
 
     if use_plain_responses := config.get("use_plain_responses", False):
         max_message_length = 4000
