@@ -178,6 +178,13 @@ async def on_message(new_msg: discord.Message) -> None:
 
     base_url = provider_config["base_url"]
     api_key = provider_config.get("api_key", "sk-no-key-required")
+    if api_key in (None, ""):
+        logging.error(f"Missing API key for provider '{provider}' — add its key to your .env file (see config.yaml) or switch to an OpenRouter model.")
+        try:
+            await new_msg.reply(f"⚠️ I don't have an API key for the `{provider}` provider — add it to your `.env` file or switch model with `/model`.")
+        except discord.HTTPException:
+            logging.exception("Failed to send missing-API-key warning")
+        return
     openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     model_parameters = config["models"].get(provider_slash_model, None)
