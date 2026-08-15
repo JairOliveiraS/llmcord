@@ -34,6 +34,16 @@ providers:
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
 
+  # NanoGPT: same OpenAI-compatible API, supports :online web-search suffixes.
+  # To bill searches to your own Exa key (BYOK, 5% NanoGPT platform fee):
+  #   1. Store your Exa key at https://nano-gpt.com/byok
+  #   2. Uncomment the extra_headers below, then restart the bot
+  nanogpt:
+    base_url: https://nano-gpt.com/api/v1
+    api_key_env: NANOGPT_API_KEY
+    # extra_headers:
+    #   x-use-byok: "true"
+
   openai:
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
@@ -65,6 +75,9 @@ models:
   openrouter/google/gemini-3.5-flash-lite:
   openrouter/google/gemini-3.7-flash:online:
   openrouter/google/gemini-3.6-flash:
+  nanogpt/google/gemini-3.7-flash:
+  nanogpt/google/gemini-3.7-flash:online:
+  nanogpt/google/gemini-3.7-flash:online/exa-neural:
   openrouter/openai/gpt-5.5:
     reasoning_effort: high
     verbosity: medium
