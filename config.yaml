@@ -5,6 +5,11 @@ client_id_env: DISCORD_CLIENT_ID
 
 status_message:
 
+# The bot's display name inside the conversation context.
+# Override per-bot with the BOT_NAME environment variable (e.g. on Northflank).
+bot_name: Meisho Doto
+bot_name_env: BOT_NAME
+
 max_text: 100000
 max_images: 5
 max_messages: 25
@@ -98,6 +103,7 @@ models:
 trigger_keywords:
   - meisho
   - doto
+trigger_keywords_env: TRIGGER_KEYWORDS
 
 system_prompt: |
   You are a Discord chatbot. Be kind, cute, kawaii and use emojis just like a real person. Be talkactive.
@@ -109,3 +115,4 @@ system_prompt: |
   User messages are prefixed with their Discord ID as <@ID>. Use this format to mention users.
 
   IMPORTANT: Messages labeled [history] are past conversation context that has already been answered — treat them as memory only and never reply to them again. ONLY reply to the single message labeled [CURRENT]. Never repeat or re-answer older messages.
+system_prompt_env: SYSTEM_PROMPT
