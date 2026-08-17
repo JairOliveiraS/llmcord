@@ -109,6 +109,17 @@ Or run local models with:
    docker compose up
    ```
 
+## Running multiple bots in one container
+
+One container can run several bots with different personalities. Each bot gets its own config file, and each extra config reads its own namespaced environment variables.
+
+1. Copy `config-2-example.yaml` to e.g. `config-kant.yaml` and edit it (name, keywords, system prompt, etc.).
+2. Give the new bot its own env vars: `BOT2_DISCORD_TOKEN`, `BOT2_CLIENT_ID`, `BOT2_NAME`, `BOT2_SYSTEM_PROMPT`, `BOT2_TRIGGER_KEYWORDS` (shared API keys are reused).
+3. Set the `BOT_CONFIGS` env var to the space-separated list of configs to run, e.g. `config.yaml config-kant.yaml`. Unset, it defaults to `config.yaml` (one bot).
+4. Every bot is restarted automatically if it crashes, and log lines are prefixed with the config file name.
+
+On Northflank (free tier = 2 services), add the extra bot's env vars to an existing service and update its `BOT_CONFIGS` — no new service needed.
+
 ## Notes
 
 - If you're having issues, try my suggestions [here](https://github.com/jakobdylanc/llmcord/issues/19)
