@@ -36,7 +36,17 @@ MAX_MESSAGE_NODES = 500
 
 def resolve_env(node: Any) -> Any:
     if isinstance(node, dict):
-        return {key.removesuffix("_env"): os.environ.get(value) if key.endswith("_env") else resolve_env(value) for key, value in node.items()}
+        # Static values first, then _env overrides only when the variable is set.
+        # An unset _env key falls back to the static value, or None if there is none.
+        resolved = {key: resolve_env(value) for key, value in node.items() if not key.endswith("_env")}
+        for key, value in node.items():
+            if key.endswith("_env"):
+                resolved_key = key.removesuffix("_env")
+                if (env_value := os.environ.get(value)) is not None:
+                    resolved[resolved_key] = env_value
+                elif resolved_key not in resolved:
+                    resolved[resolved_key] = None
+        return resolved
     return node
 
 
@@ -145,6 +155,8 @@ async def on_message(new_msg: discord.Message) -> None:
 
     # --- MODIFIED: keyword triggers (after config is loaded, word-boundary matched) ---
     trigger_keywords = config.get("trigger_keywords", [])
+    if isinstance(trigger_keywords, str):  # from a comma-separated env var
+        trigger_keywords = [kw.strip() for kw in trigger_keywords.split(",") if kw.strip()]
     has_keyword = any(re.search(rf"\b{re.escape(kw.lower())}\b", new_msg.content.lower()) for kw in trigger_keywords)
 
     if not is_dm and discord_bot.user not in new_msg.mentions and not has_keyword:
@@ -210,6 +222,7 @@ async def on_message(new_msg: discord.Message) -> None:
         user_warnings = set()
 
         # --- MODIFIED: build context from channel history instead of reply chains ---
+        bot_name = config.get("bot_name") or "Meisho Doto"
 
         def format_history_msg(hist_msg, is_current=False):
             """Format a message with timestamp for clear temporal context."""
@@ -220,7 +233,7 @@ async def on_message(new_msg: discord.Message) -> None:
             if role == "user":
                 text = f"[{prefix}] <@{hist_msg.author.id}> ({ts}): {cleaned}"
             else:
-                text = f"[{prefix}] Meisho Doto ({ts}): {cleaned}"
+                text = f"[{prefix}] {bot_name} ({ts}): {cleaned}"
             return text, role
 
         # Build messages in CORRECT API order: system prompt → history → current message
