@@ -1,0 +1,70 @@
+# Example config for a SECOND bot running in the SAME container as the main
+# one (see run-bots.sh and the README). Copy this file to something like
+# config-kant.yaml, adjust it, and list it in the BOT_CONFIGS env var.
+#
+# IMPORTANT: give this bot its own namespaced environment variables so they
+# don't collide with the main bot's. On Northflank, set them on the service:
+#   BOT2_DISCORD_TOKEN   -> this bot's Discord bot token
+#   BOT2_CLIENT_ID       -> this bot's Discord application client ID
+#   BOT2_NAME            -> the bot's display name
+#   BOT2_SYSTEM_PROMPT   -> the personality prompt
+#   BOT2_TRIGGER_KEYWORDS-> comma-separated keywords, e.g. "kant, immanuel"
+# Shared keys (OPENROUTER_API_KEY, NANOGPT_API_KEY, ...) are reused as-is.
+
+bot_token_env: BOT2_DISCORD_TOKEN
+client_id_env: BOT2_CLIENT_ID
+
+status_message: Ponder with me ✨
+
+bot_name: Second Bot
+bot_name_env: BOT2_NAME
+
+max_text: 100000
+max_images: 5
+max_messages: 25
+max_history_images: 10
+
+use_plain_responses: false
+allow_dms: true
+
+permissions:
+  users:
+    admin_ids: [YOUR_USER_ID_HERE]
+    allowed_ids: []
+    blocked_ids: []
+
+  roles:
+    allowed_ids: []
+    blocked_ids: []
+
+  channels:
+    allowed_ids: []
+    blocked_ids: []
+
+providers:
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+
+  nanogpt:
+    base_url: https://nano-gpt.com/api/v1
+    api_key_env: NANOGPT_API_KEY
+
+models:
+  openrouter/google/gemini-3.7-flash:online:
+  nanogpt/google/gemini-3.7-flash:online/exa-neural:
+
+trigger_keywords: []
+trigger_keywords_env: BOT2_TRIGGER_KEYWORDS
+
+system_prompt: |
+  You are a Discord chatbot. Be kind, cute and use emojis just like a real person.
+  Your name is Second Bot, and you'll roleplay as them.
+  Whenever someone asks you something, use your knowledge and/or the internet to answer them.
+
+  Today's date is {date}. The current time is {time}.
+
+  User messages are prefixed with their Discord ID as <@ID>. Use this format to mention users.
+
+  IMPORTANT: Messages labeled [history] are past conversation context that has already been answered — treat them as memory only and never reply to them again. ONLY reply to the single message labeled [CURRENT]. Never repeat or re-answer older messages.
+system_prompt_env: BOT2_SYSTEM_PROMPT
