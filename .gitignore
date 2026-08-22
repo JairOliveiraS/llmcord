@@ -11,3 +11,7 @@
 !config.yaml
 !docker-compose.yaml
 !requirements.txt
+
+!*.sh
+!.gitattributes
+!config-2-example.yaml
