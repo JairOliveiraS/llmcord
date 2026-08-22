@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 import os
 import re
+import sys
 from typing import Any, Literal, Optional
 
 import discord
@@ -18,9 +19,13 @@ import yaml
 
 load_dotenv()
 
+# Optional command-line argument: path to a config file. Lets one container
+# run several bots by launching this script once per config (see run-bots.sh).
+config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s: %(message)s",
+    format=f"%(asctime)s %(levelname)s [{config_path}]: %(message)s",
 )
 
 VISION_MODEL_TAGS = ("chat-latest", "claude", "gemini", "gemma", "gpt-4", "gpt-5", "gpt-latest", "grok-4", "llama", "vision", "vl")
@@ -55,7 +60,7 @@ def get_config(filename: str = "config.yaml") -> dict[str, Any]:
         return resolve_env(yaml.safe_load(file))
 
 
-config = get_config()
+config = get_config(config_path)
 curr_model = next(iter(config["models"]))
 
 msg_nodes = {}
