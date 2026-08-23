@@ -130,7 +130,7 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
     global config
 
     if curr_str == "":
-        config = await asyncio.to_thread(get_config)
+        config = await asyncio.to_thread(get_config, config_path)
 
     choices = [Choice(name=f"◉ {curr_model} (current)", value=curr_model)] if curr_str.lower() in curr_model.lower() else []
     choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != curr_model and curr_str.lower() in model.lower()]
@@ -156,7 +156,7 @@ async def on_message(new_msg: discord.Message) -> None:
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
     channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
 
-    config = await asyncio.to_thread(get_config)
+    config = await asyncio.to_thread(get_config, config_path)
 
     # --- MODIFIED: keyword triggers (after config is loaded, word-boundary matched) ---
     trigger_keywords = config.get("trigger_keywords", [])
